@@ -14,13 +14,23 @@ import {
   Users,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { getLastPlayedProgress, loadAllChildProfiles } from '../core/storage/kidsProfileStorage';
 
 interface LandingPageProps {
   onSelectChild: (childIndex: number) => void;
   catalog?: BookRecord[];
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onSelectChild }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onSelectChild, catalog = [] }) => {
+  const { profiles } = loadAllChildProfiles();
+  const maanProfile = profiles[0];
+  const toshiProfile = profiles[1];
+  const maanProgress = getLastPlayedProgress(0);
+  const toshiProgress = getLastPlayedProgress(1);
+
+  const maanBook = catalog.find((b) => b.id === maanProgress?.bookId);
+  const toshiBook = catalog.find((b) => b.id === toshiProgress?.bookId);
+
   const handlePickMaan = () => {
     confetti({
       particleCount: 70,
@@ -95,14 +105,21 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectChild }) => {
             onClick={handlePickMaan}
             className="group relative bg-gradient-to-b from-indigo-800/90 to-purple-900/90 hover:from-indigo-700 hover:to-purple-800 border-2 border-indigo-400/30 hover:border-amber-400 rounded-3xl p-6 sm:p-8 flex flex-col justify-between transition-all duration-300 transform hover:-translate-y-2 hover:shadow-2xl hover:shadow-indigo-500/30 cursor-pointer text-left"
           >
-            <div className="absolute top-4 right-4 bg-indigo-900/80 px-3 py-1 rounded-full text-xs font-black text-indigo-300 border border-indigo-500/30">
-              Ages 10+
+            <div className="absolute top-4 right-4 flex items-center gap-2">
+              {maanProgress && (
+                <span className="bg-amber-400/90 text-slate-950 font-black px-2.5 py-0.5 rounded-full text-[11px] shadow-sm flex items-center gap-1 animate-pulse">
+                  ▶ Ch. #{maanProgress.challengeNum}
+                </span>
+              )}
+              <div className="bg-indigo-900/80 px-3 py-1 rounded-full text-xs font-black text-indigo-300 border border-indigo-500/30">
+                Ages 10+
+              </div>
             </div>
 
             <div className="space-y-4">
               {/* Figure Avatar */}
               <div className="w-24 h-24 rounded-3xl bg-gradient-to-tr from-cyan-400 to-indigo-500 p-1 shadow-xl flex items-center justify-center text-5xl group-hover:scale-110 transition-transform duration-300">
-                🚀
+                {maanProfile.avatar || '🚀'}
               </div>
 
               <div>
@@ -150,7 +167,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectChild }) => {
                 className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-amber-400 via-orange-500 to-pink-500 hover:from-amber-300 hover:to-pink-400 text-slate-950 font-black text-base shadow-lg transition-all flex items-center justify-center gap-2 group-hover:scale-102 cursor-pointer"
               >
                 <Gamepad2 className="w-5 h-5 text-slate-950" />
-                <span>Play as Maan (10y)</span>
+                <span>
+                  {maanProgress && maanProgress.challengeNum > 1
+                    ? `Resume Challenge #${maanProgress.challengeNum} (Maan)`
+                    : 'Play as Maan (10y)'}
+                </span>
               </button>
             </div>
           </div>
@@ -160,14 +181,21 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectChild }) => {
             onClick={handlePickToshi}
             className="group relative bg-gradient-to-b from-amber-950/80 to-orange-950/90 hover:from-amber-900/90 hover:to-orange-900/90 border-2 border-amber-500/30 hover:border-amber-300 rounded-3xl p-6 sm:p-8 flex flex-col justify-between transition-all duration-300 transform hover:-translate-y-2 hover:shadow-2xl hover:shadow-amber-500/20 cursor-pointer text-left"
           >
-            <div className="absolute top-4 right-4 bg-amber-900/80 px-3 py-1 rounded-full text-xs font-black text-amber-300 border border-amber-500/30">
-              Ages 4–6
+            <div className="absolute top-4 right-4 flex items-center gap-2">
+              {toshiProgress && (
+                <span className="bg-amber-400/90 text-slate-950 font-black px-2.5 py-0.5 rounded-full text-[11px] shadow-sm flex items-center gap-1 animate-pulse">
+                  ▶ Ch. #{toshiProgress.challengeNum}
+                </span>
+              )}
+              <div className="bg-amber-900/80 px-3 py-1 rounded-full text-xs font-black text-amber-300 border border-amber-500/30">
+                Ages 4–6
+              </div>
             </div>
 
             <div className="space-y-4">
               {/* Figure Avatar */}
               <div className="w-24 h-24 rounded-3xl bg-gradient-to-tr from-amber-400 to-orange-500 p-1 shadow-xl flex items-center justify-center text-5xl group-hover:scale-110 transition-transform duration-300">
-                🦁
+                {toshiProfile.avatar || '🦁'}
               </div>
 
               <div>
@@ -215,7 +243,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSelectChild }) => {
                 className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-amber-400 via-orange-400 to-emerald-400 hover:from-amber-300 hover:to-emerald-300 text-slate-950 font-black text-base shadow-lg transition-all flex items-center justify-center gap-2 group-hover:scale-102 cursor-pointer"
               >
                 <Gamepad2 className="w-5 h-5 text-slate-950" />
-                <span>Play as Toshi (6y)</span>
+                <span>
+                  {toshiProgress && toshiProgress.challengeNum > 1
+                    ? `Resume Challenge #${toshiProgress.challengeNum} (Toshi)`
+                    : 'Play as Toshi (6y)'}
+                </span>
               </button>
             </div>
           </div>

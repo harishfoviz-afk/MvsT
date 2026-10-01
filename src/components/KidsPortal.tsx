@@ -15,6 +15,11 @@ import {
   formatSeconds,
   ExplorerProfile,
   PuzzleCompletionResult,
+  loadAllChildProfiles,
+  setActiveChildIndex,
+  getActiveChildIndex,
+  saveLastPlayedProgress,
+  getLastPlayedProgress,
 } from '../core/storage/kidsProfileStorage';
 import { generateFullBookProject, createDefaultConfig } from '../core/assembly/bookAssembler';
 import { createBookRecordFromProject, saveBookToCatalog } from '../core/storage/bookCatalogStorage';
@@ -26,11 +31,6 @@ import {
   formatRemainingPassTime,
   PassState,
 } from '../core/monetization/passStorage';
-import {
-  loadAllChildProfiles,
-  setActiveChildIndex,
-  getActiveChildIndex,
-} from '../core/storage/kidsProfileStorage';
 import confetti from 'canvas-confetti';
 import {
   Sparkles,
@@ -68,13 +68,48 @@ interface KidsPortalProps {
 }
 
 const AVATARS = [
-  { id: 'lion', emoji: '🦁', name: 'Safari Scout' },
-  { id: 'rocket', emoji: '🚀', name: 'Astro Cadet' },
-  { id: 'dino', emoji: '🦖', name: 'Dino Tracker' },
-  { id: 'unicorn', emoji: '🦄', name: 'Magic Hero' },
-  { id: 'dolphin', emoji: '🐬', name: 'Ocean Diver' },
-  { id: 'bear', emoji: '🐻', name: 'Forest Bear' },
+  { id: 'rocket', emoji: '🚀', name: 'Astro Rocket' },
+  { id: 'lion', emoji: '🦁', name: 'Safari Lion' },
+  { id: 'dino', emoji: '🦖', name: 'Dino Explorer' },
+  { id: 'unicorn', emoji: '🦄', name: 'Magic Unicorn' },
+  { id: 'dolphin', emoji: '🐬', name: 'Ocean Dolphin' },
+  { id: 'bear', emoji: '🐻', name: 'Brave Bear' },
+  { id: 'racecar', emoji: '🏎️', name: 'Speed Racer' },
+  { id: 'tiger', emoji: '🐯', name: 'Wild Tiger' },
+  { id: 'panda', emoji: '🐼', name: 'Kung-Fu Panda' },
+  { id: 'fox', emoji: '🦊', name: 'Clever Fox' },
+  { id: 'robot', emoji: '🤖', name: 'Cosmic Bot' },
+  { id: 'zap', emoji: '⚡', name: 'Lightning Star' },
+  { id: 'crown', emoji: '👑', name: 'Royal Champ' },
+  { id: 'gamepad', emoji: '🎮', name: 'Game Master' },
+  { id: 'soccer', emoji: '⚽', name: 'Sports Ace' },
+  { id: 'monkey', emoji: '🐵', name: 'Silly Monkey' },
+  { id: 'eagle', emoji: '🦅', name: 'Sky Eagle' },
+  { id: 'star', emoji: '🌟', name: 'Super Star' },
 ];
+
+function getResumeIndexForBook(
+  book: BookRecord,
+  profile: ExplorerProfile,
+  savedChallengeNum?: number
+): number {
+  if (!book || !book.project.pages.length) return 0;
+  if (savedChallengeNum) {
+    const idx = book.project.pages.findIndex(
+      (p, i) => (p.challengeNumber || i + 1) === savedChallengeNum
+    );
+    if (idx !== -1) return idx;
+  }
+  for (let ch = 1; ch <= book.project.pages.length; ch++) {
+    if (!profile.puzzleRecords[`${book.id}_ch_${ch}`]) {
+      const idx = book.project.pages.findIndex(
+        (p, i) => (p.challengeNumber || i + 1) === ch
+      );
+      if (idx !== -1) return idx;
+    }
+  }
+  return 0;
+}
 
 export const KidsPortal: React.FC<KidsPortalProps> = ({
   catalog,
@@ -94,13 +129,28 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
     const switched = setActiveChildIndex(idx);
     setActiveChildIdx(idx);
     setProfile(switched);
-    setExplorerName(switched.name || '');
-    setExplorerAvatar(switched.avatar || '🦁');
-    setSelectedAgeGroup(switched.ageGroup || '4-6');
-    setSelectedAgeNumber(switched.ageYears || null);
+    setExplorerName(switched.name || (idx === 0 ? 'Maan' : 'Toshi'));
+    setExplorerAvatar(switched.avatar || (idx === 0 ? '🚀' : '🦁'));
+    setSelectedAgeGroup(switched.ageGroup || (idx === 0 ? '10+' : '4-6'));
+    setSelectedAgeNumber(switched.ageYears || (idx === 0 ? 10 : 6));
     setBirthDate(switched.birthDate || '');
-    setIsNameSet(Boolean(switched.name && switched.name.trim().length > 0));
-    setActiveBook(null);
+    setIsNameSet(true);
+
+    // Immediately resume this child's last played book & challenge!
+    const lastProgress = getLastPlayedProgress(idx);
+    let resumeBook: BookRecord | null = null;
+    if (lastProgress) {
+      resumeBook = catalog.find((b) => b.id === lastProgress.bookId) || null;
+    }
+    if (!resumeBook) {
+      const targetAge = switched.ageGroup || (idx === 0 ? '10+' : '4-6');
+      resumeBook = catalog.find((b) => b.ageGroup === targetAge) || catalog[0] || null;
+    }
+    if (resumeBook) {
+      handleOpenBook(resumeBook, lastProgress?.challengeNum);
+    } else {
+      setActiveBook(null);
+    }
   };
 
   const [explorerName, setExplorerName] = useState<string>(() => profile.name || '');
@@ -204,14 +254,43 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
     confetti({ particleCount: 70, spread: 70, origin: { y: 0.6 } });
   };
 
-  // Active playing book
-  const [activeBook, setActiveBook] = useState<BookRecord | null>(initialBook || null);
-  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  // Active playing book - auto resume where they left off!
+  const [activeBook, setActiveBook] = useState<BookRecord | null>(() => {
+    if (initialBook) return initialBook;
+    const currentIdx = getActiveChildIndex();
+    const lastProgress = getLastPlayedProgress(currentIdx);
+    if (lastProgress) {
+      const found = catalog.find((b) => b.id === lastProgress.bookId);
+      if (found) return found;
+    }
+    const targetAge = currentIdx === 0 ? '10+' : '4-6';
+    return catalog.find((b) => b.ageGroup === targetAge) || catalog[0] || null;
+  });
+
+  const [currentPageIndex, setCurrentPageIndex] = useState<number>(() => {
+    const currentIdx = getActiveChildIndex();
+    const curBook = initialBook || (() => {
+      const lastProgress = getLastPlayedProgress(currentIdx);
+      if (lastProgress) {
+        const found = catalog.find((b) => b.id === lastProgress.bookId);
+        if (found) return found;
+      }
+      const targetAge = currentIdx === 0 ? '10+' : '4-6';
+      return catalog.find((b) => b.ageGroup === targetAge) || catalog[0] || null;
+    })();
+
+    if (!curBook) return 0;
+    const lastProgress = getLastPlayedProgress(currentIdx);
+    const targetCh = (lastProgress && lastProgress.bookId === curBook.id) ? lastProgress.challengeNum : undefined;
+    return getResumeIndexForBook(curBook, loadExplorerProfile(), targetCh);
+  });
+
   const [completedPuzzles, setCompletedPuzzles] = useState<Set<number>>(() => {
-    if (!initialBook) return new Set();
+    const curBook = activeBook || initialBook;
+    if (!curBook) return new Set();
     const solved = new Set<number>();
-    for (let ch = 1; ch <= initialBook.project.pages.length; ch++) {
-      if (profile.puzzleRecords[`${initialBook.id}_ch_${ch}`]) {
+    for (let ch = 1; ch <= curBook.project.pages.length; ch++) {
+      if (profile.puzzleRecords[`${curBook.id}_ch_${ch}`]) {
         solved.add(ch);
       }
     }
@@ -250,29 +329,40 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
     }
   };
 
-  // Login handler with Age and Date of Birth persistence
-  const handleStartAdventure = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!explorerName.trim()) return;
-    const numYears = typeof selectedAgeNumber === 'number'
-      ? selectedAgeNumber
-      : (calculatedFromDob?.ageYears || (selectedAgeGroup === '4-6' ? 5 : selectedAgeGroup === '7-9' ? 8 : 11));
+  // Start Adventure directly into the first game!
+  const handleStartAdventure = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     const updated = updateExplorerIdentity(
-      explorerName.trim(),
+      profile.name || (activeChildIdx === 0 ? 'Maan' : 'Toshi'),
       explorerAvatar,
-      selectedAgeGroup,
-      birthDate || undefined,
-      numYears
+      profile.ageGroup || (activeChildIdx === 0 ? '10+' : '4-6'),
+      profile.birthDate || undefined,
+      profile.ageYears || (activeChildIdx === 0 ? 10 : 6)
     );
     setProfile(updated);
     setIsNameSet(true);
-    confetti({ particleCount: 50, spread: 60, origin: { y: 0.6 } });
+    confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
+
+    // Open book directly into the game
+    let targetBook = activeBook;
+    if (!targetBook) {
+      const lastProgress = getLastPlayedProgress(activeChildIdx);
+      if (lastProgress) {
+        targetBook = catalog.find((b) => b.id === lastProgress.bookId) || null;
+      }
+      if (!targetBook) {
+        const targetAge = profile.ageGroup || (activeChildIdx === 0 ? '10+' : '4-6');
+        targetBook = catalog.find((b) => b.ageGroup === targetAge) || catalog[0] || null;
+      }
+    }
+    if (targetBook) {
+      handleOpenBook(targetBook);
+    }
   };
 
   // Handle opening a book from the bookshelf with saved solved challenges
-  const handleOpenBook = (book: BookRecord) => {
+  const handleOpenBook = (book: BookRecord, targetChallengeNum?: number) => {
     setActiveBook(book);
-    setCurrentPageIndex(0);
     const solvedInBook = new Set<number>();
     for (let ch = 1; ch <= book.project.pages.length; ch++) {
       if (profile.puzzleRecords[`${book.id}_ch_${ch}`]) {
@@ -280,6 +370,19 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
       }
     }
     setCompletedPuzzles(solvedInBook);
+
+    let targetCh = targetChallengeNum;
+    if (!targetCh) {
+      const lastProgress = getLastPlayedProgress(activeChildIdx);
+      if (lastProgress && lastProgress.bookId === book.id) {
+        targetCh = lastProgress.challengeNum;
+      }
+    }
+    const resumeIdx = getResumeIndexForBook(book, profile, targetCh);
+    setCurrentPageIndex(resumeIdx);
+    const actPage = book.project.pages[resumeIdx];
+    const finalCh = actPage?.challengeNumber || (resumeIdx + 1);
+    saveLastPlayedProgress(book.id, finalCh);
   };
 
   const totalChallenges = activeBook ? activeBook.project.pages.length : 0;
@@ -303,7 +406,7 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
       colors: ['#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#8b5cf6'],
     });
 
-    let msg = `🌟 AWESOME JOB, ${profile.name.toUpperCase()}! Stamp #${challengeNum} Claimed!`;
+    let msg = `🌟 AWESOME JOB, ${profile.name.toUpperCase()}! Challenge #${challengeNum} Solved!`;
     if (result) {
       const starText = '⭐'.repeat(result.starsEarned);
       msg = `${starText} ${formatSeconds(result.timeSeconds)} • +${result.xpGained} XP! ${
@@ -317,7 +420,7 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
     celebrationTimerRef.current = window.setTimeout(() => setShowCelebration(null), 5500);
   };
 
-  // Mark solved, celebrate, record in profile, and immediately show the Adventure Passport page!
+  // Mark solved, celebrate, record in profile, and keep them moving to the next challenge!
   const handleSolveChallenge = (
     challengeNum: number,
     elapsedSeconds: number = 45,
@@ -351,15 +454,30 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
       setJustSolvedChallenge(challengeNum);
       triggerPuzzleCelebration(challengeNum, solveResult);
 
-      // Immediately navigate to the Adventure Passport page
-      const passportIdx = playPages.findIndex((p) => p.type === 'passport');
-      setCurrentPageIndex(passportIdx !== -1 ? passportIdx : 1);
+      const isAllCompleted = activeBook && next.size === activeBook.project.pages.length;
 
-      if (activeBook && next.size === activeBook.project.pages.length && isNewSolve) {
+      if (isAllCompleted) {
         setTimeout(() => {
           setShowCertificate(true);
           confetti({ particleCount: 150, spread: 100, origin: { y: 0.4 } });
-        }, 2200);
+          const certIdx = playPages.findIndex((p) => p.type === 'certificate');
+          if (certIdx !== -1) setCurrentPageIndex(certIdx);
+        }, 1500);
+      } else {
+        // Keep them moving directly to the next challenge!
+        const nextChallenge = challengeNum + 1;
+        if (activeBook && nextChallenge <= activeBook.project.pages.length) {
+          saveLastPlayedProgress(activeBook.id, nextChallenge);
+          setTimeout(() => {
+            const nextIdx = playPages.findIndex(
+              (p) => p.type === 'activity' && p.challengeNumber === nextChallenge
+            );
+            if (nextIdx !== -1) {
+              setJustSolvedChallenge(null);
+              setCurrentPageIndex(nextIdx);
+            }
+          }, 1800);
+        }
       }
       return next;
     });
@@ -395,10 +513,10 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
     }
   };
 
-  // Build the book pages
+  // Build the book pages (Activity puzzles ONLY - no cover, belongsTo, or passport inline pages)
   interface PlayPage {
     id: string;
-    type: 'cover' | 'belongsTo' | 'passport' | 'activity' | 'dictionary' | 'certificate';
+    type: 'activity' | 'dictionary' | 'certificate';
     title: string;
     challengeNumber?: number;
     activityPage?: ActivityPage;
@@ -408,16 +526,7 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
     if (!activeBook) return [];
     const list: PlayPage[] = [];
 
-    // 0. Cover
-    list.push({ id: 'cover', type: 'cover', title: activeBook.title });
-
-    // 1. Belongs To Personalization Page
-    list.push({ id: 'belongsTo', type: 'belongsTo', title: 'This Book Belongs To' });
-
-    // 2. Stamp Passport
-    list.push({ id: 'passport', type: 'passport', title: `My ${totalChallenges}-Challenge Passport` });
-
-    // Activities
+    // Activities directly - game starts immediately!
     activeBook.project.pages.forEach((act, idx) => {
       list.push({
         id: act.id,
@@ -428,16 +537,23 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
       });
     });
 
-    // 2. Picture Dictionary & Vocabulary Guide
+    // Picture Dictionary at end of book
     list.push({ id: 'dictionary', type: 'dictionary', title: "Explorer's Picture Dictionary" });
 
-    // 3. Final Certificate
+    // Grand Certificate
     list.push({ id: 'cert', type: 'certificate', title: 'Grand Explorer Certificate' });
 
     return list;
-  }, [activeBook, totalChallenges]);
+  }, [activeBook]);
 
   const currentPage = playPages[currentPageIndex] || playPages[0];
+
+  // Auto-persist last played challenge whenever the page changes
+  useEffect(() => {
+    if (activeBook && currentPage?.type === 'activity' && currentPage?.challengeNumber) {
+      saveLastPlayedProgress(activeBook.id, currentPage.challengeNumber);
+    }
+  }, [activeBook, currentPageIndex, currentPage]);
 
   // SVG Stamp Passport
   const passportSVG = useMemo(() => {
@@ -463,16 +579,16 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
     });
   }, [activeBook]);
 
-  // If explorer name is not set, show the playful Login Screen
+  // Fast 1-tap Avatar Selector (Name, Age & Tier already calibrated for Maan & Toshi!)
   if (!isNameSet) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex flex-col items-center justify-center p-4">
+      <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 flex flex-col items-center justify-center p-4">
         {/* Top return to player selector */}
         {onGoToLanding && (
           <div className="absolute top-4 left-4">
             <button
               onClick={onGoToLanding}
-              className="px-3.5 py-2 rounded-xl bg-white/20 hover:bg-white/30 text-white font-bold text-xs backdrop-blur-md transition-all flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs backdrop-blur-md transition-all flex items-center gap-1.5 cursor-pointer border border-white/10"
             >
               <ArrowLeft className="w-4 h-4" />
               <span>Choose Player</span>
@@ -480,211 +596,44 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
           </div>
         )}
 
-        <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl border-4 border-white/40 text-center space-y-5 max-h-[94vh] overflow-y-auto">
-          <div className="space-y-1.5">
-            <div className="text-4xl sm:text-5xl animate-bounce">🦁 🚀 🧩</div>
-            <h1 className="text-2xl font-black text-slate-900 font-heading">
-              TotLogix Kids Hub
+        <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl border-4 border-amber-400 text-center space-y-6">
+          <div className="space-y-2">
+            <div className="text-6xl animate-bounce">{explorerAvatar}</div>
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 font-heading">
+              Ready, {profile.name}! 🚗
             </h1>
-            <p className="text-xs text-slate-500 font-medium">
-              Solve mazes, word searches &amp; logic puzzles, earn real stamps, and unlock your official certificate!
+            <p className="text-xs sm:text-sm text-slate-600 font-medium">
+              Pick your favorite explorer avatar to start the road trip adventure!
             </p>
           </div>
 
-          <form onSubmit={handleStartAdventure} className="space-y-4 text-left">
-            {/* Step 1: Avatar */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                1. Pick Your Explorer Avatar
-              </label>
-              <div className="grid grid-cols-6 gap-2">
-                {AVATARS.map((av) => (
-                  <button
-                    key={av.id}
-                    type="button"
-                    onClick={() => setExplorerAvatar(av.emoji)}
-                    className={`text-2xl p-2 rounded-2xl border-2 transition-all cursor-pointer ${
-                      explorerAvatar === av.emoji
-                        ? 'border-amber-500 bg-amber-50 scale-110 shadow-sm'
-                        : 'border-slate-200 hover:bg-slate-50'
-                    }`}
-                    title={av.name}
-                  >
-                    {av.emoji}
-                  </button>
-                ))}
-              </div>
-            </div>
+          {/* 18 Fun Avatars Grid */}
+          <div className="grid grid-cols-6 gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+            {AVATARS.map((av) => (
+              <button
+                key={av.id}
+                type="button"
+                onClick={() => setExplorerAvatar(av.emoji)}
+                className={`text-2xl sm:text-3xl p-2 rounded-2xl border-2 transition-all cursor-pointer flex flex-col items-center justify-center ${
+                  explorerAvatar === av.emoji
+                    ? 'border-amber-500 bg-amber-100 scale-110 shadow-md ring-2 ring-amber-400'
+                    : 'border-slate-200 hover:bg-white hover:scale-105'
+                }`}
+                title={av.name}
+              >
+                <span>{av.emoji}</span>
+              </button>
+            ))}
+          </div>
 
-            {/* Step 2: Name */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                2. What is Your Explorer Name?
-              </label>
-              <input
-                type="text"
-                required
-                maxLength={24}
-                placeholder="Enter your name (e.g. Leo, Maya)..."
-                value={explorerName}
-                onChange={(e) => setExplorerName(e.target.value)}
-                className="w-full px-4 py-2.5 bg-slate-50 border-2 border-slate-200 rounded-2xl text-base font-bold text-slate-900 placeholder-slate-400 focus:outline-none focus:border-amber-500"
-              />
-            </div>
-
-            {/* Step 3: Age & Date of Birth */}
-            <div className="space-y-2 pt-1 border-t border-slate-100">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  3. How Old Are You?
-                </label>
-                <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
-                  Calibrates Puzzle Size &amp; Rules
-                </span>
-              </div>
-
-              {/* Quick Age Buttons: 4 to 12+ */}
-              <div className="flex items-center gap-1 overflow-x-auto pb-1">
-                {[4, 5, 6, 7, 8, 9, 10, 11, '12+'].map((ageVal) => {
-                  const isSelected = selectedAgeNumber === ageVal;
-                  return (
-                    <button
-                      key={String(ageVal)}
-                      type="button"
-                      onClick={() => handleSelectAgePill(ageVal)}
-                      className={`flex-1 min-w-[32px] py-1.5 rounded-xl font-black text-xs transition-all cursor-pointer border-2 text-center ${
-                        isSelected
-                          ? 'border-indigo-600 bg-indigo-600 text-white shadow-xs scale-105'
-                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {ageVal}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* 3 Age Group Tier Cards */}
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedAgeGroup('4-6');
-                    setSelectedAgeNumber(5);
-                  }}
-                  className={`p-2 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${
-                    selectedAgeGroup === '4-6'
-                      ? 'border-emerald-500 bg-emerald-50 shadow-xs ring-2 ring-emerald-400/20'
-                      : 'border-slate-200 hover:border-slate-300 bg-slate-50/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-lg">👶</span>
-                    <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
-                      selectedAgeGroup === '4-6' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-600'
-                    }`}>
-                      Ages 4–6
-                    </span>
-                  </div>
-                  <div className="mt-1">
-                    <div className="text-[11px] font-black text-slate-800 leading-tight">Junior Scout</div>
-                    <p className="text-[9px] text-slate-500 font-medium leading-tight mt-0.5">
-                      4x4 Sudoku • 8x8 Mazes • 5 Words
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedAgeGroup('7-9');
-                    setSelectedAgeNumber(8);
-                  }}
-                  className={`p-2 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${
-                    selectedAgeGroup === '7-9'
-                      ? 'border-blue-500 bg-blue-50 shadow-xs ring-2 ring-blue-400/20'
-                      : 'border-slate-200 hover:border-slate-300 bg-slate-50/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-lg">👦</span>
-                    <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
-                      selectedAgeGroup === '7-9' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
-                    }`}>
-                      Ages 7–9
-                    </span>
-                  </div>
-                  <div className="mt-1">
-                    <div className="text-[11px] font-black text-slate-800 leading-tight">Explorer</div>
-                    <p className="text-[9px] text-slate-500 font-medium leading-tight mt-0.5">
-                      6x6 Sudoku • 15x15 Mazes • Diagonals
-                    </p>
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedAgeGroup('10+');
-                    setSelectedAgeNumber(11);
-                  }}
-                  className={`p-2 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${
-                    selectedAgeGroup === '10+'
-                      ? 'border-purple-500 bg-purple-50 shadow-xs ring-2 ring-purple-400/20'
-                      : 'border-slate-200 hover:border-slate-300 bg-slate-50/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-lg">🧑</span>
-                    <span className={`text-[9px] font-black px-1.5 py-0.2 rounded-full ${
-                      selectedAgeGroup === '10+' ? 'bg-purple-600 text-white' : 'bg-slate-200 text-slate-600'
-                    }`}>
-                      Ages 10+
-                    </span>
-                  </div>
-                  <div className="mt-1">
-                    <div className="text-[11px] font-black text-slate-800 leading-tight">Master</div>
-                    <p className="text-[9px] text-slate-500 font-medium leading-tight mt-0.5">
-                      9x9 Sudoku • 25x25 Mazes • 14 Words
-                    </p>
-                  </div>
-                </button>
-              </div>
-
-              {/* Optional Date of Birth Input with live auto-calculation */}
-              <div className="p-2.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-bold text-slate-600 flex items-center gap-1">
-                    <span>🎂 Date of Birth (Optional)</span>
-                  </label>
-                  <span className="text-[9px] text-slate-400 font-medium">Auto-calibrates age</span>
-                </div>
-                <input
-                  type="date"
-                  value={birthDate}
-                  max={new Date().toISOString().split('T')[0]}
-                  onChange={(e) => handleBirthDateChange(e.target.value)}
-                  className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-500"
-                />
-                {birthDate && calculatedFromDob && (
-                  <div className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg flex items-center gap-1">
-                    <span>🎈</span>
-                    <span>
-                      Awesome! You are <strong>{calculatedFromDob.ageYears} years old</strong> — calibrated for <strong>Ages {calculatedFromDob.ageGroup}</strong>!
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 via-orange-500 to-emerald-500 hover:from-amber-600 hover:to-emerald-600 text-white font-extrabold text-base shadow-lg transition-all transform hover:scale-[1.02] active:scale-95 cursor-pointer flex items-center justify-center gap-2 mt-2"
-            >
-              <Sparkles className="w-5 h-5" />
-              <span>Start My Adventure!</span>
-            </button>
-          </form>
+          <button
+            type="button"
+            onClick={() => handleStartAdventure()}
+            className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-400 via-orange-500 to-emerald-500 hover:from-amber-300 hover:to-emerald-400 text-slate-950 font-black text-base shadow-xl transition-all transform hover:scale-[1.02] active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+          >
+            <Sparkles className="w-5 h-5 text-slate-950" />
+            <span>Start Adventure! 🚀</span>
+          </button>
         </div>
       </div>
     );
@@ -1160,204 +1109,7 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
       {/* Main Solver Canvas */}
       <main className="flex-1 flex flex-col items-center justify-center p-4 max-w-4xl mx-auto w-full">
         <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden w-full flex flex-col items-center p-4 md:p-6 min-h-[580px] justify-between">
-          {/* 1. Cover View */}
-          {currentPage.type === 'cover' && (
-            <div className="my-auto text-center space-y-4 max-w-md w-full">
-              <div className="aspect-[4/3] rounded-2xl bg-gradient-to-tr from-blue-500 via-indigo-600 to-purple-600 p-6 text-white flex flex-col justify-between shadow-xl">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase font-black text-amber-300 tracking-wider">
-                    {activeBook.project.config.authorName}
-                  </span>
-                  <span className="text-[10px] font-black uppercase tracking-wider text-white/90 bg-white/20 px-2 py-0.5 rounded-md">
-                    Kunta Publications
-                  </span>
-                </div>
-                <div>
-                  <h1 className="text-2xl font-black uppercase text-white leading-tight">
-                    {activeBook.title}
-                  </h1>
-                  <p className="text-xs text-blue-100 mt-2">{activeBook.subtitle}</p>
-                </div>
-                <div className="inline-block mx-auto px-3 py-1 bg-amber-400 text-slate-900 rounded-full text-xs font-bold">
-                  Explorer Edition for {explorerName || 'Young Adventurer'}
-                </div>
-              </div>
 
-              <button
-                onClick={() => setCurrentPageIndex(1)}
-                className="px-6 py-3 bg-amber-500 hover:bg-amber-600 text-white font-extrabold rounded-2xl text-sm shadow-md transition-all flex items-center justify-center gap-2 mx-auto cursor-pointer"
-              >
-                <span>Open Book!</span>
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* 2. Interactive "This Book Belongs To" Personalization Page */}
-          {currentPage.type === 'belongsTo' && (
-            <div className="my-auto text-center space-y-6 max-w-lg w-full p-6 sm:p-8 bg-gradient-to-b from-amber-50/70 via-white to-sky-50/70 rounded-3xl border-4 border-dashed border-amber-200 shadow-sm">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-100 text-3xl shadow-inner mb-1">
-                ✏️
-              </div>
-              
-              <div>
-                <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-wider font-heading uppercase">
-                  This Book Belongs To:
-                </h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Type your name below to personalize this activity edition!
-                </p>
-              </div>
-
-              <div className="max-w-md mx-auto space-y-2">
-                <input
-                  type="text"
-                  maxLength={32}
-                  placeholder="Type your name here..."
-                  value={explorerName}
-                  onChange={(e) => {
-                    const newName = e.target.value;
-                    setExplorerName(newName);
-                    if (activeBook) {
-                      activeBook.project.config.childName = newName;
-                    }
-                  }}
-                  onBlur={() => {
-                    if (explorerName.trim()) {
-                      const updated = updateExplorerIdentity(explorerName.trim(), explorerAvatar);
-                      setProfile(updated);
-                    }
-                  }}
-                  className="w-full text-center text-2xl sm:text-3xl font-black font-serif tracking-wide text-indigo-700 bg-transparent border-b-4 border-dashed border-indigo-400 focus:border-indigo-600 focus:outline-none pb-2 transition-all placeholder-slate-300"
-                />
-                <div className="text-[11px] text-slate-400 italic">
-                  (Write your name above or color your signature!)
-                </div>
-              </div>
-
-              <div className="pt-3">
-                <button
-                  onClick={() => {
-                    const passportIdx = playPages.findIndex((p) => p.type === 'passport');
-                    setCurrentPageIndex(passportIdx !== -1 ? passportIdx : 2);
-                  }}
-                  className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-extrabold rounded-2xl text-sm shadow-md transition-all flex items-center justify-center gap-2 mx-auto cursor-pointer hover:scale-102"
-                >
-                  <span>Continue to Passport</span>
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* 2. Stamp Passport View */}
-          {currentPage.type === 'passport' && (
-            <div className="w-full flex flex-col items-center space-y-3 max-w-xl">
-              {/* Celebration Banner if a stamp was just completed */}
-              {justSolvedChallenge && (
-                <div className="w-full bg-gradient-to-r from-amber-500 via-emerald-500 to-teal-500 p-4 rounded-2xl text-white shadow-lg flex flex-col sm:flex-row items-center justify-between gap-3 animate-in zoom-in-95">
-                  <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 rounded-full bg-white text-emerald-600 font-black text-2xl flex items-center justify-center shadow-md border-2 border-emerald-300 shrink-0">
-                      ✓
-                    </div>
-                    <div className="text-left">
-                      <div className="text-xs font-black uppercase tracking-wider text-amber-200">
-                        Passport Updated! ★
-                      </div>
-                      <div className="text-sm font-extrabold text-white">
-                        Challenge #{justSolvedChallenge} Stamped Below!
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {nextUnsolvedChallenge ? (
-                      <button
-                        onClick={() => {
-                          const targetIdx = playPages.findIndex(
-                            (p) => p.type === 'activity' && p.challengeNumber === nextUnsolvedChallenge
-                          );
-                          if (targetIdx !== -1) {
-                            setJustSolvedChallenge(null);
-                            setCurrentPageIndex(targetIdx);
-                          }
-                        }}
-                        className="px-4 py-2 rounded-xl bg-white text-slate-900 hover:bg-amber-100 font-black text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap hover:scale-105"
-                      >
-                        <span>Play Challenge #{nextUnsolvedChallenge}</span>
-                        <ChevronRight className="w-4 h-4 text-emerald-600" />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setShowCertificate(true)}
-                        className="px-4 py-2 rounded-xl bg-amber-300 text-slate-900 font-black text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap hover:scale-105"
-                      >
-                        <span>Certificate 🏆</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Navigation Header if not just solved */}
-              {!justSolvedChallenge && (
-                <div className="w-full bg-slate-50 border border-slate-200 p-3 rounded-2xl flex items-center justify-between gap-3">
-                  <div className="text-left">
-                    <div className="text-xs font-bold text-slate-800">
-                      {completedPuzzles.size === 0
-                        ? 'Ready to begin your adventure?'
-                        : `🏆 ${completedPuzzles.size} of ${totalChallenges} Badges Completed!`}
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      {completedPuzzles.size === totalChallenges
-                        ? 'All challenges solved! Grand Champion!'
-                        : `Next up: Challenge #${nextUnsolvedChallenge || 1}`}
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      const targetIdx = playPages.findIndex(
-                        (p) => p.type === 'activity' && p.challengeNumber === (nextUnsolvedChallenge || 1)
-                      );
-                      if (targetIdx !== -1) {
-                        setJustSolvedChallenge(null);
-                        setCurrentPageIndex(targetIdx);
-                      }
-                    }}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-emerald-500 hover:from-amber-600 hover:to-emerald-600 text-white font-black text-xs shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105"
-                  >
-                    <span>
-                      {completedPuzzles.size === 0
-                        ? 'Start Challenge #1'
-                        : `Play Challenge #${nextUnsolvedChallenge || 1}`}
-                    </span>
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-
-              {/* Interactive Passport SVG - Tap any badge to jump directly to that puzzle */}
-              <div
-                onClick={handlePassportClick}
-                className="w-full max-w-[500px] aspect-[612/792] shadow-md rounded-2xl overflow-hidden border-2 border-slate-300 bg-white cursor-pointer hover:border-amber-400 transition-colors"
-                title="Tap any badge to jump to its puzzle challenge!"
-                dangerouslySetInnerHTML={{ __html: passportSVG }}
-              />
-
-              <div className="w-full flex items-center justify-between text-[11px] text-slate-500 px-2">
-                <span>💡 Tip: Click any badge above to jump straight to that puzzle!</span>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Passport</span>
-                </button>
-              </div>
-            </div>
-          )}
 
           {/* 3. Activity Puzzle Solver */}
           {currentPage.type === 'activity' && currentPage.activityPage && (

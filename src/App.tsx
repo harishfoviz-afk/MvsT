@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BookRecord } from './types/book';
 import { useRouter } from './core/router/useRouter';
 import { loadBookCatalog } from './core/storage/bookCatalogStorage';
-import { setActiveChildIndex } from './core/storage/kidsProfileStorage';
+import { setActiveChildIndex, getLastPlayedProgress } from './core/storage/kidsProfileStorage';
 import { KidsPortal } from './components/KidsPortal';
 import { LandingPage } from './components/LandingPage';
 
@@ -25,12 +25,19 @@ export const App: React.FC = () => {
     }
   }, [router.bookId, catalog]);
 
-  // Handler when selecting Maan (idx 0) or Toshi (idx 1)
+  // Handler when selecting Maan (idx 0) or Toshi (idx 1) - auto resume where they left off!
   const handleSelectChild = (childIdx: number) => {
     setActiveChildIndex(childIdx);
-    const targetAge = childIdx === 0 ? '10+' : '4-6';
-    const ageBook = catalog.find((b) => b.ageGroup === targetAge) || null;
-    setKidsSelectedBook(ageBook);
+    const lastProgress = getLastPlayedProgress(childIdx);
+    let chosenBook: BookRecord | null = null;
+    if (lastProgress) {
+      chosenBook = catalog.find((b) => b.id === lastProgress.bookId) || null;
+    }
+    if (!chosenBook) {
+      const targetAge = childIdx === 0 ? '10+' : '4-6';
+      chosenBook = catalog.find((b) => b.ageGroup === targetAge) || null;
+    }
+    setKidsSelectedBook(chosenBook);
     router.navigate('kids');
   };
 

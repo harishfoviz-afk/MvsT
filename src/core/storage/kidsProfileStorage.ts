@@ -48,6 +48,9 @@ export interface ExplorerProfile {
   cleanSolvesCount: number;
   puzzleRecords: Record<string, PuzzleRecord>; // key: `${bookId}_ch_${challengeNumber}`
   completedGames: Record<string, CompletedGameRecord>; // key: bookId
+  lastPlayedBookId?: string;
+  lastPlayedChallengeNum?: number;
+  lastPlayedAt?: string;
 }
 
 export interface PuzzleCompletionResult {
@@ -276,6 +279,8 @@ export function createDefaultProfile(childIdx?: number): ExplorerProfile {
       cleanSolvesCount: 0,
       puzzleRecords: {},
       completedGames: {},
+      lastPlayedBookId: 'book-animals-4-6-starter',
+      lastPlayedChallengeNum: 1,
     };
   }
 
@@ -293,6 +298,8 @@ export function createDefaultProfile(childIdx?: number): ExplorerProfile {
     cleanSolvesCount: 0,
     puzzleRecords: {},
     completedGames: {},
+    lastPlayedBookId: 'book-space-10-starter',
+    lastPlayedChallengeNum: 1,
   };
 }
 
@@ -305,7 +312,7 @@ export function hasSavedExplorerProfile(): boolean {
   if (!raw) return false;
   try {
     const parsed = JSON.parse(raw);
-    return Boolean(parsed.name && parsed.name.trim().length > 0);
+    return Boolean(parsed.name && parsed.name.trim().length > 0 && parsed.avatar);
   } catch {
     return false;
   }
@@ -372,6 +379,9 @@ export function loadExplorerProfile(): ExplorerProfile {
           ageYears: parsed.ageYears || defaultProfile.ageYears,
           puzzleRecords: parsed.puzzleRecords || {},
           completedGames: parsed.completedGames || {},
+          lastPlayedBookId: parsed.lastPlayedBookId || defaultProfile.lastPlayedBookId,
+          lastPlayedChallengeNum: parsed.lastPlayedChallengeNum || defaultProfile.lastPlayedChallengeNum,
+          lastPlayedAt: parsed.lastPlayedAt,
         };
       }
     }
@@ -380,6 +390,50 @@ export function loadExplorerProfile(): ExplorerProfile {
   }
 
   return createDefaultProfile(activeIdx);
+}
+
+/**
+ * Saves the last played book and challenge for the active child
+ */
+export function saveLastPlayedProgress(bookId: string, challengeNum: number): void {
+  const profile = loadExplorerProfile();
+  profile.lastPlayedBookId = bookId;
+  profile.lastPlayedChallengeNum = challengeNum;
+  profile.lastPlayedAt = new Date().toISOString();
+  saveExplorerProfile(profile);
+}
+
+/**
+ * Gets the last played book and challenge for a given child index (0 = Maan, 1 = Toshi)
+ */
+export function getLastPlayedProgress(childIdx?: number): {
+  bookId: string;
+  challengeNum: number;
+} | null {
+  const targetIdx = childIdx !== undefined ? childIdx : getActiveChildIndex();
+  const rawKey = targetIdx === 1 ? `${STORAGE_KEY}_sibling` : STORAGE_KEY;
+  const raw = getStorageItem(rawKey);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed.lastPlayedBookId) {
+        return {
+          bookId: parsed.lastPlayedBookId,
+          challengeNum: parsed.lastPlayedChallengeNum || 1,
+        };
+      }
+    } catch {
+      // fallback
+    }
+  }
+  const defaultProf = createDefaultProfile(targetIdx);
+  if (defaultProf.lastPlayedBookId) {
+    return {
+      bookId: defaultProf.lastPlayedBookId,
+      challengeNum: defaultProf.lastPlayedChallengeNum || 1,
+    };
+  }
+  return null;
 }
 
 /**
