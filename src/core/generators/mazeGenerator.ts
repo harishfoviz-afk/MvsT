@@ -175,6 +175,141 @@ export function generateMaze(ageGroup: AgeGroup, theme: BookTheme, seed: number 
   };
 }
 
+/**
+ * Generates mobile-optimized digital paths for interactive touch screens.
+ * Corridors are 35-60px wide so kids can clearly see turns and tap along the road!
+ */
+export function generateDigitalPath(
+  ageGroup: AgeGroup,
+  theme: BookTheme,
+  seed: number = Date.now()
+): MazeData {
+  const rng = createRNG(seed);
+
+  let cols = 8;
+  let rows = 8;
+  let difficulty: 'easy' | 'medium' | 'hard' = 'easy';
+
+  if (ageGroup === '4-6') {
+    cols = 6;
+    rows = 6;
+    difficulty = 'easy';
+  } else if (ageGroup === '7-9') {
+    cols = 8;
+    rows = 8;
+    difficulty = 'medium';
+  } else {
+    // Maan (10+): 10x10 gives rich winding paths with 35-40px wide corridors!
+    cols = 10;
+    rows = 10;
+    difficulty = 'hard';
+  }
+
+  // Initialize grid
+  const grid: MazeCell[][] = [];
+  for (let y = 0; y < rows; y++) {
+    const row: MazeCell[] = [];
+    for (let x = 0; x < cols; x++) {
+      row.push({
+        x,
+        y,
+        top: true,
+        right: true,
+        bottom: true,
+        left: true,
+        visited: false,
+      });
+    }
+    grid.push(row);
+  }
+
+  // Recursive backtracker algorithm
+  const stack: MazeCell[] = [];
+  const startCell = grid[0][0];
+  startCell.visited = true;
+  stack.push(startCell);
+
+  while (stack.length > 0) {
+    const current = stack[stack.length - 1];
+    const neighbors: { cell: MazeCell; dir: 'top' | 'right' | 'bottom' | 'left' }[] = [];
+
+    if (current.y > 0 && !grid[current.y - 1][current.x].visited) {
+      neighbors.push({ cell: grid[current.y - 1][current.x], dir: 'top' });
+    }
+    if (current.x < cols - 1 && !grid[current.y][current.x + 1].visited) {
+      neighbors.push({ cell: grid[current.y][current.x + 1], dir: 'right' });
+    }
+    if (current.y < rows - 1 && !grid[current.y + 1][current.x].visited) {
+      neighbors.push({ cell: grid[current.y + 1][current.x], dir: 'bottom' });
+    }
+    if (current.x > 0 && !grid[current.y][current.x - 1].visited) {
+      neighbors.push({ cell: grid[current.y][current.x - 1], dir: 'left' });
+    }
+
+    if (neighbors.length > 0) {
+      const nextIdx = Math.floor(rng() * neighbors.length);
+      const { cell: nextCell, dir } = neighbors[nextIdx];
+
+      if (dir === 'top') {
+        current.top = false;
+        nextCell.bottom = false;
+      } else if (dir === 'right') {
+        current.right = false;
+        nextCell.left = false;
+      } else if (dir === 'bottom') {
+        current.bottom = false;
+        nextCell.top = false;
+      } else if (dir === 'left') {
+        current.left = false;
+        nextCell.right = false;
+      }
+
+      nextCell.visited = true;
+      stack.push(nextCell);
+    } else {
+      stack.pop();
+    }
+  }
+
+  // Braid slightly to open extra open passages for smooth, enjoyable driving
+  for (let y = 1; y < rows - 1; y++) {
+    for (let x = 1; x < cols - 1; x++) {
+      const cell = grid[y][x];
+      const wallCount = (cell.top ? 1 : 0) + (cell.right ? 1 : 0) + (cell.bottom ? 1 : 0) + (cell.left ? 1 : 0);
+      if (wallCount >= 3 && rng() > 0.4) {
+        if (cell.top && y > 0) {
+          cell.top = false;
+          grid[y - 1][x].bottom = false;
+        } else if (cell.right && x < cols - 1) {
+          cell.right = false;
+          grid[y][x + 1].left = false;
+        }
+      }
+    }
+  }
+
+  // Open start and end borders
+  grid[0][0].top = false;
+  grid[rows - 1][cols - 1].bottom = false;
+
+  const start = { x: 0, y: 0 };
+  const end = { x: cols - 1, y: rows - 1 };
+
+  const solutionPath = solveMazeBFS(grid, cols, rows, start, end);
+
+  return {
+    cols,
+    rows,
+    grid,
+    start,
+    end,
+    solutionPath,
+    theme,
+    difficulty,
+    seed,
+  };
+}
+
 export function solveMazeBFS(
   grid: MazeCell[][],
   cols: number,

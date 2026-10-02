@@ -34,6 +34,7 @@ import {
   CanvasPoint,
   checkWallCollision,
   mapCanvasPointToMazeCell,
+  findMazePathBetweenCells,
 } from '../core/validators/mazeValidator';
 import { formatSeconds, calculateStars } from '../core/storage/kidsProfileStorage';
 
@@ -395,8 +396,8 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
   const playerAvatar = avatarEmoji || (ageGroup === '10+' ? '🚀' : '🦁');
 
   // Smart Corridor Glide & Navigation for Mobile Fingers
-  const handleMazeMove = (dir: 'up' | 'down' | 'left' | 'right') => {
-    if (isSolved || !mazeGrid) return;
+  const handleMazeMove = (dir: 'up' | 'down' | 'left' | 'right'): boolean => {
+    if (isSolved || !mazeGrid) return false;
     let cur = { ...avatarPos };
     let path = [...avatarPath];
     let stepsTaken = 0;
@@ -451,8 +452,10 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
       const isHorizontal = dir === 'left' || dir === 'right';
       const side1 = isHorizontal ? { col: cur.col, row: cur.row - 1 } : { col: cur.col - 1, row: cur.row };
       const side2 = isHorizontal ? { col: cur.col, row: cur.row + 1 } : { col: cur.col + 1, row: cur.row };
-      const side1Open = !checkWallCollision(cur, side1, mazeGrid, mazeCols, mazeRows);
-      const side2Open = !checkWallCollision(cur, side2, mazeGrid, mazeCols, mazeRows);
+      const side1InBounds = side1.col >= 0 && side1.col < mazeCols && side1.row >= 0 && side1.row < mazeRows;
+      const side2InBounds = side2.col >= 0 && side2.col < mazeCols && side2.row >= 0 && side2.row < mazeRows;
+      const side1Open = side1InBounds && !checkWallCollision(cur, side1, mazeGrid, mazeCols, mazeRows);
+      const side2Open = side2InBounds && !checkWallCollision(cur, side2, mazeGrid, mazeCols, mazeRows);
 
       if (side1Open || side2Open) {
         // Stop at fork in hallway so kid can choose direction
@@ -471,9 +474,50 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
         confetti({ particleCount: 95, spread: 80, origin: { y: 0.6 } });
         onSolve(timerSeconds, 0);
       }
+      return true;
     } else {
       setMazeFeedback('🚫 Wall ahead! Try another direction.');
       setTimeout(() => setMazeFeedback(null), 1600);
+      return false;
+    }
+  };
+
+  // Step forward along the solved pathway towards the exit
+  const handleMazeStepForward = () => {
+    if (isSolved || !mazeGrid) return;
+    if (puzzleData?.solutionPath && Array.isArray(puzzleData.solutionPath)) {
+      const solPath: { x: number; y: number }[] = puzzleData.solutionPath;
+      const curIdx = solPath.findIndex((p) => p.x === avatarPos.col && p.y === avatarPos.row);
+      if (curIdx !== -1 && curIdx < solPath.length - 1) {
+        const nextTarget = solPath[curIdx + 1];
+        const nextCell = { col: nextTarget.x, row: nextTarget.y };
+        playNumberPop(2);
+        setAvatarPos(nextCell);
+        setAvatarPath((prev) => [...prev, nextCell]);
+        if (nextCell.col === mazeCols - 1 && nextCell.row === mazeRows - 1) {
+          setMazeFeedback('🎉 BRILLIANT! You guided your explorer to the finish! 🌟');
+          playVictoryFanfare();
+          confetti({ particleCount: 95, spread: 80, origin: { y: 0.6 } });
+          onSolve(timerSeconds, 0);
+        }
+        return;
+      }
+    }
+
+    // Fallback: use findMazePathBetweenCells to find next step to exit
+    const exitCell = { col: mazeCols - 1, row: mazeRows - 1 };
+    const pathToExit = findMazePathBetweenCells(avatarPos, exitCell, mazeGrid, mazeCols, mazeRows);
+    if (pathToExit && pathToExit.length > 1) {
+      const nextCell = pathToExit[1];
+      playNumberPop(2);
+      setAvatarPos(nextCell);
+      setAvatarPath((prev) => [...prev, nextCell]);
+      if (nextCell.col === exitCell.col && nextCell.row === exitCell.row) {
+        setMazeFeedback('🎉 BRILLIANT! You guided your explorer to the finish! 🌟');
+        playVictoryFanfare();
+        confetti({ particleCount: 95, spread: 80, origin: { y: 0.6 } });
+        onSolve(timerSeconds, 0);
+      }
     }
   };
 
@@ -489,7 +533,7 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
       if (dx === 1) handleMazeMove('right');
       else if (dx === -1) handleMazeMove('left');
       else if (dy === 1) handleMazeMove('down');
-      else if (dy === -1) handleMazeMove('up');
+      else if (dy === 1) handleMazeMove('up');
     } else if (avatarPath.length > 1) {
       const prev = avatarPath[avatarPath.length - 2];
       const dx = prev.col - avatarPos.col;
@@ -553,7 +597,7 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
       return;
     }
 
-    // Direct tap on maze canvas cell
+    // Direct tap on maze canvas cell: Tap-to-move pathfinding!
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
@@ -561,12 +605,39 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
     const cell = mapCanvasPointToMazeCell(point, rect.width, rect.height, mazeCols, mazeRows);
     if (!cell.insideMaze) return;
 
+    const targetCell = { col: cell.col, row: cell.row };
+    if (targetCell.col === avatarPos.col && targetCell.row === avatarPos.row) {
+      return;
+    }
+
+    // Try finding open pathway between avatarPos and targetCell
+    const subPath = findMazePathBetweenCells(avatarPos, targetCell, mazeGrid, mazeCols, mazeRows);
+    if (subPath && subPath.length > 1) {
+      playNumberPop(2);
+      setAvatarPos(targetCell);
+      setAvatarPath((prev) => [...prev, ...subPath.slice(1)]);
+
+      if (targetCell.col === mazeCols - 1 && targetCell.row === mazeRows - 1) {
+        setMazeFeedback('🎉 BRILLIANT! You navigated your explorer to the finish! 🌟');
+        playVictoryFanfare();
+        confetti({ particleCount: 95, spread: 80, origin: { y: 0.6 } });
+        onSolve(timerSeconds, 0);
+      } else {
+        setMazeFeedback(null);
+      }
+      return;
+    }
+
+    // If no direct open corridor connects avatarPos to tapped cell, try gliding in the nearest open direction
     const dCol = cell.col - avatarPos.col;
     const dRow = cell.row - avatarPos.row;
-    if (Math.abs(dCol) > Math.abs(dRow)) {
-      handleMazeMove(dCol > 0 ? 'right' : 'left');
-    } else if (Math.abs(dRow) > 0) {
-      handleMazeMove(dRow > 0 ? 'down' : 'up');
+    let moved = false;
+    if (Math.abs(dCol) >= Math.abs(dRow)) {
+      if (dCol !== 0) moved = handleMazeMove(dCol > 0 ? 'right' : 'left');
+      if (!moved && dRow !== 0) handleMazeMove(dRow > 0 ? 'down' : 'up');
+    } else {
+      if (dRow !== 0) moved = handleMazeMove(dRow > 0 ? 'down' : 'up');
+      if (!moved && dCol !== 0) handleMazeMove(dCol > 0 ? 'right' : 'left');
     }
   };
 
@@ -1048,7 +1119,7 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
         ref={containerRef}
         onPointerDown={handleStagePointerDown}
         onPointerUp={handleStagePointerUp}
-        className="relative w-full aspect-[500/520] max-h-[460px] bg-white border-2 border-slate-200 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden touch-none select-none cursor-pointer"
+        className="relative w-full aspect-[500/520] max-h-[380px] sm:max-h-[460px] bg-white border-2 border-slate-200 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden touch-none select-none cursor-pointer"
       >
         {/* Pause Screen Overlay */}
         {isTimerPaused && !isSolved && (
@@ -1300,9 +1371,9 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
             )}
 
             {/* Helper Tip when in Maze Glide mode */}
-            {!isSolved && puzzleType === 'maze' && mazeControlMode === 'glide' && avatarPath.length <= 1 && (
-              <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none z-20 bg-indigo-950/80 text-white text-[11px] font-bold px-3.5 py-1 rounded-full shadow-lg backdrop-blur-xs flex items-center gap-1.5 animate-pulse border border-indigo-400/30">
-                <span>🎮 Tap D-Pad arrows below or swipe on maze to guide {playerAvatar}!</span>
+            {!isSolved && puzzleType === 'maze' && mazeControlMode === 'glide' && (
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none z-20 bg-indigo-950/85 text-white text-[11px] font-bold px-3.5 py-1 rounded-full shadow-lg backdrop-blur-xs flex items-center gap-1.5 animate-pulse border border-indigo-400/30 whitespace-nowrap">
+                <span>💡 Tap any corridor to drive {playerAvatar} or tap Drive 🚗 below!</span>
               </div>
             )}
           </>
@@ -1317,27 +1388,44 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
         )}
       </div>
 
-      {/* Interactive Maze D-Pad Keypad & Touch Controls for Road Trip */}
+      {/* Interactive Maze Glide & Auto-Drive Controls for Road Trip */}
       {puzzleType === 'maze' && mazeControlMode === 'glide' && (
-        <div className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-center space-y-2.5 mt-2 shadow-xs">
+        <div className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-2.5 sm:p-3 text-center space-y-2 mt-2 shadow-xs">
           <div className="flex items-center justify-between text-xs font-bold text-slate-600 px-1">
             <span className="flex items-center gap-1 text-slate-700">
-              <span>🎮 Road-Trip D-Pad: Tap Arrows or Swipe Maze to Glide</span>
+              <span>🎮 Tap any corridor to drive {playerAvatar} • Or tap Drive below</span>
             </span>
-            <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
-              (or use keyboard Arrow Keys / WASD)
-            </span>
+            <button
+              type="button"
+              onClick={handleResetMazePath}
+              className="text-[11px] text-slate-500 hover:text-slate-800 flex items-center gap-1 font-semibold cursor-pointer"
+              title="Restart from entrance"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Restart</span>
+            </button>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-4">
-            {/* 4-Way Thumb Pad */}
-            <div className="inline-grid grid-cols-3 gap-1.5 p-1.5 bg-slate-200/90 rounded-2xl shadow-inner">
+          <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+            {/* BIG 1-Tap Drive Forward Button */}
+            <button
+              type="button"
+              onClick={handleMazeStepForward}
+              className="flex-1 min-w-[130px] sm:min-w-[160px] py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-95 text-white font-black text-xs sm:text-sm shadow-sm flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+              title="Step forward along the open road"
+            >
+              <Play className="w-4 h-4 fill-white" />
+              <span>Drive 🚗 Forward</span>
+            </button>
+
+            {/* Compact 4-Direction Cross Arrows */}
+            <div className="inline-grid grid-cols-3 gap-1 p-1 bg-slate-200/90 rounded-xl shadow-inner">
               <div />
               <button
                 type="button"
                 onClick={() => handleMazeMove('up')}
-                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
-                title="Glide Up (Arrow Up)"
+                className="w-9 h-8 rounded-lg bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-sm shadow-2xs border border-slate-300 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Up"
               >
                 ⬆️
               </button>
@@ -1346,24 +1434,24 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
               <button
                 type="button"
                 onClick={() => handleMazeMove('left')}
-                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
-                title="Glide Left (Arrow Left)"
+                className="w-9 h-8 rounded-lg bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-sm shadow-2xs border border-slate-300 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Left"
               >
                 ⬅️
               </button>
               <button
                 type="button"
                 onClick={handleMazeHint}
-                className="w-12 h-12 rounded-xl bg-amber-100 hover:bg-amber-200 active:bg-amber-300 text-amber-800 font-black text-lg shadow-xs border-2 border-amber-300 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
-                title="Smart Hint: Step towards the exit"
+                className="w-9 h-8 rounded-lg bg-amber-100 hover:bg-amber-200 active:bg-amber-300 text-amber-800 font-black text-xs shadow-2xs border border-amber-300 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Hint"
               >
                 💡
               </button>
               <button
                 type="button"
                 onClick={() => handleMazeMove('right')}
-                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
-                title="Glide Right (Arrow Right)"
+                className="w-9 h-8 rounded-lg bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-sm shadow-2xs border border-slate-300 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Right"
               >
                 ➡️
               </button>
@@ -1372,34 +1460,34 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
               <button
                 type="button"
                 onClick={() => handleMazeMove('down')}
-                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
-                title="Glide Down (Arrow Down)"
+                className="w-9 h-8 rounded-lg bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-sm shadow-2xs border border-slate-300 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Down"
               >
                 ⬇️
               </button>
               <div />
             </div>
 
-            {/* Quick Helper Buttons */}
-            <div className="flex flex-col gap-2">
+            {/* Smart Hint & Reset */}
+            <div className="flex flex-col gap-1">
               <button
                 type="button"
                 onClick={handleMazeHint}
-                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-xs"
-                title="Step along the solution path"
+                className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-xs"
+                title="Step towards the exit"
               >
-                <Lightbulb className="w-4 h-4 text-amber-200" />
-                <span>Next Hint</span>
+                <Lightbulb className="w-3.5 h-3.5 text-amber-200" />
+                <span>Hint</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleResetMazePath}
-                className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
+                className="px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-2xs"
                 title="Restart from entrance"
               >
-                <RotateCcw className="w-4 h-4 text-slate-500" />
-                <span>Reset Path</span>
+                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                <span>Reset</span>
               </button>
             </div>
           </div>

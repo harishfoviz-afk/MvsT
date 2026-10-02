@@ -232,3 +232,71 @@ export function validateMazeStroke(
     message,
   };
 }
+
+/**
+ * Finds the shortest open corridor path (list of cells) between two cells in a maze grid using BFS.
+ * Respects walls so the avatar never walks through closed barriers.
+ * Returns null if no open pathway connects the two cells.
+ */
+export function findMazePathBetweenCells(
+  start: { col: number; row: number },
+  target: { col: number; row: number },
+  grid: MazeCell[][],
+  cols: number,
+  rows: number
+): { col: number; row: number }[] | null {
+  if (
+    start.col < 0 || start.col >= cols || start.row < 0 || start.row >= rows ||
+    target.col < 0 || target.col >= cols || target.row < 0 || target.row >= rows
+  ) {
+    return null;
+  }
+  if (start.col === target.col && start.row === target.row) {
+    return [start];
+  }
+
+  const queue: { col: number; row: number }[] = [start];
+  const visited: boolean[][] = Array.from({ length: rows }, () => Array(cols).fill(false));
+  const parentMap: Map<string, { col: number; row: number }> = new Map();
+
+  visited[start.row][start.col] = true;
+  const key = (c: { col: number; row: number }) => `${c.col},${c.row}`;
+
+  let found = false;
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current.col === target.col && current.row === target.row) {
+      found = true;
+      break;
+    }
+
+    const cell = grid[current.row][current.col];
+    // Check 4 directions: top, right, bottom, left
+    const moves: { next: { col: number; row: number }; wall: boolean }[] = [
+      { next: { col: current.col, row: current.row - 1 }, wall: cell.top },
+      { next: { col: current.col + 1, row: current.row }, wall: cell.right },
+      { next: { col: current.col, row: current.row + 1 }, wall: cell.bottom },
+      { next: { col: current.col - 1, row: current.row }, wall: cell.left },
+    ];
+
+    for (const { next, wall } of moves) {
+      if (!wall && inBounds(next, cols, rows) && !visited[next.row][next.col]) {
+        visited[next.row][next.col] = true;
+        parentMap.set(key(next), current);
+        queue.push(next);
+      }
+    }
+  }
+
+  if (!found) return null;
+
+  const path: { col: number; row: number }[] = [];
+  let curr: { col: number; row: number } | undefined = target;
+  while (curr) {
+    path.unshift(curr);
+    if (curr.col === start.col && curr.row === start.row) break;
+    curr = parentMap.get(key(curr));
+  }
+  return path;
+}

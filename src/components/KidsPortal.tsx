@@ -3,7 +3,10 @@ import { BookRecord, ActivityPage, AgeGroup, BookTheme, ActivityType } from '../
 import { renderStampPassportSVG, getStampBadges } from '../core/generators/stampPassportGenerator';
 import { renderPictureDictionarySVG } from '../core/generators/pictureDictionaryGenerator';
 import { InteractivePuzzleCanvas } from './InteractivePuzzleCanvas';
+import { MandalaArtCanvas } from './MandalaArtCanvas';
 import { ExplorerProfileModal } from './ExplorerProfileModal';
+import { generateDigitalPath, renderMazeSVG } from '../core/generators/mazeGenerator';
+import { generateMandalaData, MANDALA_TEMPLATES } from '../core/generators/mandalaGenerator';
 import {
   loadExplorerProfile,
   createDefaultProfile,
@@ -43,7 +46,7 @@ import {
   Users,
 } from 'lucide-react';
 
-export type CategoryTab = 'paths' | 'sudoku' | 'tracing' | 'wordhunt' | 'coloring';
+export type CategoryTab = 'paths' | 'sudoku' | 'tracing' | 'wordhunt' | 'coloring' | 'mandala';
 
 export interface CategoryGameItem {
   id: string;
@@ -141,6 +144,15 @@ const CATEGORY_TABS: {
     accentColor: 'text-rose-600',
     gradientBg: 'from-rose-500 to-red-600',
     description: 'Creative coloring & beautiful bold line art scenes!',
+  },
+  {
+    id: 'mandala',
+    label: 'Mandala Art',
+    emoji: '☸️',
+    badgeBg: 'bg-teal-100 text-teal-900 border-teal-300',
+    accentColor: 'text-teal-600',
+    gradientBg: 'from-teal-500 via-cyan-500 to-emerald-500',
+    description: 'Calming radial symmetry art & geometric coloring patterns for road trips!',
   },
 ];
 
@@ -293,14 +305,89 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
       tracing: [],
       wordhunt: [],
       coloring: [],
+      mandala: [],
     };
 
-    // Index all activities from existing books in the catalog
+    const themesList: BookTheme[] = ['animals', 'space', 'dinosaurs', 'fantasy', 'underwater', 'jungle'];
+
+    // 1. Digital Screen Paths: Generates mobile touch-friendly corridors (6x6 for Toshi, 10x10 for Maan)
+    for (let lvl = 1; lvl <= 12; lvl++) {
+      const theme = themesList[(lvl - 1) % themesList.length];
+      const mazeSeed = 750000 + lvl * 1999 + (activeChildIdx === 0 ? 1000 : 2000);
+      const digitalMaze = generateDigitalPath(targetAge, theme, mazeSeed);
+      const svg = renderMazeSVG(digitalMaze, false);
+      const solSvg = renderMazeSVG(digitalMaze, true);
+      items.paths.push({
+        id: `digital_path_${targetAge}_lvl_${lvl}`,
+        category: 'paths',
+        levelNumber: lvl,
+        title: `${theme.charAt(0).toUpperCase() + theme.slice(1)} Road Trip Path`,
+        theme,
+        themeIcon: THEME_ICONS[theme] || '🌀',
+        bookId: `digital-paths-${targetAge}`,
+        bookTitle: `${profile.name}'s Path Adventures`,
+        challengeNumber: 200 + lvl,
+        activityPage: {
+          id: `digital_path_p_${lvl}`,
+          type: 'maze',
+          title: `Path Challenge #${lvl}`,
+          instructions: 'Guide your explorer along the open road to the finish line!',
+          difficulty: targetAge === '4-6' ? 'easy' : 'medium',
+          theme,
+          challengeNumber: 200 + lvl,
+          pageNumber: lvl,
+          svgContent: svg,
+          solutionSvgContent: solSvg,
+          data: digitalMaze,
+          solutionData: digitalMaze.solutionPath,
+          qc: { passed: true, score: 100, checks: { solvable: true, hasDuplicates: false, ageAppropriate: true, marginsSafe: true }, messages: [] },
+        },
+        ageGroup: targetAge,
+      });
+    }
+
+    // 2. Mandala Art: 12 calming radial symmetry & geometric art levels
+    for (let lvl = 1; lvl <= 12; lvl++) {
+      const tmplIdx = (lvl - 1) % MANDALA_TEMPLATES.length;
+      const tmpl = MANDALA_TEMPLATES[tmplIdx];
+      const mandalaSeed = 880000 + lvl * 2333 + (activeChildIdx === 0 ? 1000 : 2000);
+      const mandalaData = generateMandalaData(tmplIdx, targetAge, mandalaSeed);
+      const theme: BookTheme = (['fantasy', 'space', 'underwater', 'animals'][lvl % 4]) as BookTheme;
+
+      items.mandala.push({
+        id: `mandala_${targetAge}_lvl_${lvl}`,
+        category: 'mandala',
+        levelNumber: lvl,
+        title: tmpl.title,
+        theme,
+        themeIcon: tmpl.emoji,
+        bookId: `mandala-art-${targetAge}`,
+        bookTitle: `${profile.name}'s Mandala Art`,
+        challengeNumber: 300 + lvl,
+        activityPage: {
+          id: `mandala_p_${lvl}`,
+          type: 'coloring',
+          title: tmpl.title,
+          instructions: 'Create beautiful calming radial symmetry art with colors and kaleidoscope drawing!',
+          difficulty: targetAge === '4-6' ? 'easy' : 'medium',
+          theme,
+          challengeNumber: 300 + lvl,
+          pageNumber: lvl,
+          svgContent: mandalaData.svgContent,
+          solutionSvgContent: mandalaData.svgContent,
+          data: mandalaData,
+          solutionData: null,
+          qc: { passed: true, score: 100, checks: { solvable: true, hasDuplicates: false, ageAppropriate: true, marginsSafe: true }, messages: [] },
+        },
+        ageGroup: targetAge,
+      });
+    }
+
+    // 3. Index existing book activities for Sudoku, Tracing, Word Hunts, Coloring
     childBooks.forEach((book) => {
       book.project.pages.forEach((page, pIdx) => {
         let cat: CategoryTab | null = null;
-        if (page.type === 'maze') cat = 'paths';
-        else if (page.type === 'sudoku') cat = 'sudoku';
+        if (page.type === 'sudoku') cat = 'sudoku';
         else if (page.type === 'dottodot') cat = 'tracing';
         else if (page.type === 'wordsearch') cat = 'wordhunt';
         else if (page.type === 'coloring') cat = 'coloring';
@@ -323,17 +410,16 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
       });
     });
 
-    // Guarantee at least 12 exciting levels per category by generating extra on-demand
     const catTypes: Record<CategoryTab, ActivityType> = {
       paths: 'maze',
       sudoku: 'sudoku',
       tracing: 'dottodot',
       wordhunt: 'wordsearch',
       coloring: 'coloring',
+      mandala: 'coloring',
     };
-    const themesList: BookTheme[] = ['animals', 'space', 'dinosaurs', 'fantasy', 'underwater', 'jungle'];
 
-    (['paths', 'sudoku', 'tracing', 'wordhunt', 'coloring'] as CategoryTab[]).forEach((cat) => {
+    (['sudoku', 'tracing', 'wordhunt', 'coloring'] as CategoryTab[]).forEach((cat) => {
       let genIdx = items[cat].length;
       while (items[cat].length < 12) {
         genIdx++;
@@ -544,36 +630,31 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
             </div>
           </button>
 
-          {/* Center: Maan & Toshi Sibling Switcher */}
-          <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200/80 text-xs shadow-inner">
-            <button
-              type="button"
-              onClick={() => handleSwitchChild(0)}
-              className={`px-3 py-1.5 rounded-xl font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeChildIdx === 0
-                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm scale-102'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Play as Maan (10 Years Old • Ages 10+)"
-            >
-              <span>🚀 Maan (10y)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSwitchChild(1)}
-              className={`px-3 py-1.5 rounded-xl font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeChildIdx === 1
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm scale-102'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Play as Toshi (6 Years Old • Ages 4-6)"
-            >
-              <span>🦁 Toshi (6y)</span>
-            </button>
+          {/* Center: Dedicated Child Space Badge */}
+          <div className="flex items-center gap-2">
+            <span className="px-3.5 py-1.5 rounded-2xl bg-indigo-50 border border-indigo-200/80 text-indigo-950 text-xs sm:text-sm font-black hidden sm:flex items-center gap-2 shadow-2xs">
+              <span className="text-base">{profile.avatar}</span>
+              <span>{profile.name}&apos;s Play Space</span>
+              <span className="text-[10px] text-indigo-600 bg-white px-2 py-0.5 rounded-full border border-indigo-200 font-extrabold">
+                {activeChildIdx === 0 ? 'Age 10 • Vacation Hub' : 'Age 6 • Vacation Hub'}
+              </span>
+            </span>
           </div>
 
-          {/* Right Controls: Passport, Audio & Player Chooser */}
+          {/* Right Controls: Switch Kid, Passport & Audio */}
           <div className="flex items-center gap-1.5">
+            {onGoToLanding && (
+              <button
+                type="button"
+                onClick={onGoToLanding}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95 hover:scale-105"
+                title="Switch Kid (Return to Player Selection)"
+              >
+                <span>🏠</span>
+                <span className="font-black">Switch Kid</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setShowPassportModal(true)}
@@ -596,17 +677,6 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
                 <VolumeX className="w-3.5 h-3.5 text-slate-400" />
               )}
             </button>
-
-            {onGoToLanding && (
-              <button
-                type="button"
-                onClick={onGoToLanding}
-                className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer hidden sm:flex items-center gap-1"
-                title="Return to Player Chooser"
-              >
-                <Users className="w-3.5 h-3.5 text-indigo-600" />
-              </button>
-            )}
           </div>
         </div>
       </header>
@@ -736,20 +806,32 @@ export const KidsPortal: React.FC<KidsPortalProps> = ({
 
                 return (
                   <div className="w-full max-w-xl flex flex-col items-center space-y-3">
-                    <InteractivePuzzleCanvas
-                      svgContent={activeGameItem.activityPage.svgContent || ''}
-                      solutionSvgContent={activeGameItem.activityPage.solutionSvgContent}
-                      puzzleType={activeGameItem.activityPage.type}
-                      puzzleData={activeGameItem.activityPage.data}
-                      challengeNumber={activeGameItem.challengeNumber}
-                      ageGroup={activeGameItem.ageGroup}
-                      avatarEmoji={profile.avatar}
-                      bestTimeSeconds={solvedRecord?.bestTimeSeconds}
-                      isSolved={isCurrentSolved}
-                      onSolve={(elapsedSeconds, conflictsCount) =>
-                        handleSolveCategoryGame(activeGameItem, elapsedSeconds, conflictsCount)
-                      }
-                    />
+                    {activeGameItem.category === 'mandala' ? (
+                      <MandalaArtCanvas
+                        svgTemplate={activeGameItem.activityPage.svgContent}
+                        title={activeGameItem.title}
+                        ageGroup={activeGameItem.ageGroup}
+                        isSolved={isCurrentSolved}
+                        onSolve={(elapsedSeconds) =>
+                          handleSolveCategoryGame(activeGameItem, elapsedSeconds || 45, 0)
+                        }
+                      />
+                    ) : (
+                      <InteractivePuzzleCanvas
+                        svgContent={activeGameItem.activityPage.svgContent || ''}
+                        solutionSvgContent={activeGameItem.activityPage.solutionSvgContent}
+                        puzzleType={activeGameItem.activityPage.type}
+                        puzzleData={activeGameItem.activityPage.data}
+                        challengeNumber={activeGameItem.challengeNumber}
+                        ageGroup={activeGameItem.ageGroup}
+                        avatarEmoji={profile.avatar}
+                        bestTimeSeconds={solvedRecord?.bestTimeSeconds}
+                        isSolved={isCurrentSolved}
+                        onSolve={(elapsedSeconds, conflictsCount) =>
+                          handleSolveCategoryGame(activeGameItem, elapsedSeconds, conflictsCount)
+                        }
+                      />
+                    )}
 
                     {/* Solved Status & Replay */}
                     {isCurrentSolved && (
