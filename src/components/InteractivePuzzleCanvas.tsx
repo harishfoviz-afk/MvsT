@@ -29,7 +29,12 @@ import {
   getSudokuHint,
   parseSudokuFromSvg,
 } from '../core/validators/sudokuValidator';
-import { validateMazeStroke, CanvasPoint } from '../core/validators/mazeValidator';
+import {
+  validateMazeStroke,
+  CanvasPoint,
+  checkWallCollision,
+  mapCanvasPointToMazeCell,
+} from '../core/validators/mazeValidator';
 import { formatSeconds, calculateStars } from '../core/storage/kidsProfileStorage';
 
 interface InteractivePuzzleCanvasProps {
@@ -41,6 +46,7 @@ interface InteractivePuzzleCanvasProps {
   ageGroup?: AgeGroup;
   bestTimeSeconds?: number;
   isSolved: boolean;
+  avatarEmoji?: string;
   onSolve: (elapsedSeconds?: number, conflictsCount?: number) => void;
 }
 
@@ -62,6 +68,7 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
   ageGroup,
   bestTimeSeconds,
   isSolved,
+  avatarEmoji,
   onSolve,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -77,9 +84,18 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
   const timerIntervalRef = useRef<number | null>(null);
   const drawnStrokeRef = useRef<CanvasPoint[]>([]);
 
+  // Maze Glide & D-Pad State for Finger/Touch Accommodation
+  const [mazeControlMode, setMazeControlMode] = useState<'glide' | 'crayon'>('glide');
+  const [avatarPos, setAvatarPos] = useState<{ col: number; row: number }>({ col: 0, row: 0 });
+  const [avatarPath, setAvatarPath] = useState<{ col: number; row: number }[]>([{ col: 0, row: 0 }]);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
   useEffect(() => {
     setTimerSeconds(0);
     setIsTimerPaused(false);
+    setAvatarPos({ col: 0, row: 0 });
+    setAvatarPath([{ col: 0, row: 0 }]);
+    setMazeFeedback(null);
   }, [svgContent, challengeNumber]);
 
   useEffect(() => {
@@ -350,6 +366,210 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [puzzleType, sudokuMode, sudokuSpecs, selectedSudokuCell, userSudokuGrid]);
 
+  // Maze Metrics & Goal/Avatar Specs
+  const mazeCols = puzzleData?.cols || 10;
+  const mazeRows = puzzleData?.rows || 10;
+  const mazeGrid = puzzleData?.grid;
+
+  const mazeCellMetrics = React.useMemo(() => {
+    const padding = 35;
+    const mazeW = 500 - padding * 2;
+    const mazeH = 500 - padding * 2;
+    const cellSize = Math.min(mazeW / mazeCols, mazeH / mazeRows);
+    const actualW = cellSize * mazeCols;
+    const actualH = cellSize * mazeRows;
+    const offsetX = (500 - actualW) / 2;
+    const offsetY = (500 - actualH) / 2;
+    return { cellSize, offsetX, offsetY };
+  }, [mazeCols, mazeRows]);
+
+  const THEME_GOAL_ICONS: Record<string, string> = {
+    animals: '🦴',
+    space: '🪐',
+    dinosaurs: '🌿',
+    fantasy: '🏰',
+    underwater: '🪸',
+    jungle: '🍌',
+  };
+  const goalIcon = (puzzleData?.theme && THEME_GOAL_ICONS[puzzleData.theme]) || '🏁';
+  const playerAvatar = avatarEmoji || (ageGroup === '10+' ? '🚀' : '🦁');
+
+  // Smart Corridor Glide & Navigation for Mobile Fingers
+  const handleMazeMove = (dir: 'up' | 'down' | 'left' | 'right') => {
+    if (isSolved || !mazeGrid) return;
+    let cur = { ...avatarPos };
+    let path = [...avatarPath];
+    let stepsTaken = 0;
+
+    const deltas: Record<string, { col: number; row: number }> = {
+      up: { col: 0, row: -1 },
+      down: { col: 0, row: 1 },
+      left: { col: -1, row: 0 },
+      right: { col: 1, row: 0 },
+    };
+    const d = deltas[dir];
+
+    // Glide along open hallway until a wall or decision junction
+    while (stepsTaken < 40) {
+      const next = { col: cur.col + d.col, row: cur.row + d.row };
+      if (checkWallCollision(cur, next, mazeGrid, mazeCols, mazeRows)) {
+        break;
+      }
+
+      cur = next;
+      stepsTaken++;
+
+      // If backtracking to the previous cell in the trail, cleanly undo!
+      if (
+        path.length >= 2 &&
+        path[path.length - 2].col === cur.col &&
+        path[path.length - 2].row === cur.row
+      ) {
+        path.pop();
+      } else {
+        path.push({ ...cur });
+      }
+
+      // Reached finish exit
+      if (cur.col === mazeCols - 1 && cur.row === mazeRows - 1) {
+        break;
+      }
+
+      // Check if forward movement is blocked by a wall
+      const forwardBlocked = checkWallCollision(
+        cur,
+        { col: cur.col + d.col, row: cur.row + d.row },
+        mazeGrid,
+        mazeCols,
+        mazeRows
+      );
+      if (forwardBlocked) {
+        break;
+      }
+
+      // Check if there are perpendicular branches (junctions)
+      const isHorizontal = dir === 'left' || dir === 'right';
+      const side1 = isHorizontal ? { col: cur.col, row: cur.row - 1 } : { col: cur.col - 1, row: cur.row };
+      const side2 = isHorizontal ? { col: cur.col, row: cur.row + 1 } : { col: cur.col + 1, row: cur.row };
+      const side1Open = !checkWallCollision(cur, side1, mazeGrid, mazeCols, mazeRows);
+      const side2Open = !checkWallCollision(cur, side2, mazeGrid, mazeCols, mazeRows);
+
+      if (side1Open || side2Open) {
+        // Stop at fork in hallway so kid can choose direction
+        break;
+      }
+    }
+
+    if (stepsTaken > 0) {
+      playNumberPop(2);
+      setAvatarPos(cur);
+      setAvatarPath(path);
+
+      if (cur.col === mazeCols - 1 && cur.row === mazeRows - 1) {
+        setMazeFeedback('🎉 BRILLIANT! You navigated your explorer to the finish! 🌟');
+        playVictoryFanfare();
+        confetti({ particleCount: 95, spread: 80, origin: { y: 0.6 } });
+        onSolve(timerSeconds, 0);
+      }
+    } else {
+      setMazeFeedback('🚫 Wall ahead! Try another direction.');
+      setTimeout(() => setMazeFeedback(null), 1600);
+    }
+  };
+
+  const handleMazeHint = () => {
+    if (!puzzleData?.solutionPath || isSolved) return;
+    const solPath: { x: number; y: number }[] = puzzleData.solutionPath;
+    const curIdx = solPath.findIndex((p) => p.x === avatarPos.col && p.y === avatarPos.row);
+
+    if (curIdx !== -1 && curIdx < solPath.length - 1) {
+      const nextStep = solPath[curIdx + 1];
+      const dx = nextStep.x - avatarPos.col;
+      const dy = nextStep.y - avatarPos.row;
+      if (dx === 1) handleMazeMove('right');
+      else if (dx === -1) handleMazeMove('left');
+      else if (dy === 1) handleMazeMove('down');
+      else if (dy === -1) handleMazeMove('up');
+    } else if (avatarPath.length > 1) {
+      const prev = avatarPath[avatarPath.length - 2];
+      const dx = prev.col - avatarPos.col;
+      const dy = prev.row - avatarPos.row;
+      if (dx === 1) handleMazeMove('right');
+      else if (dx === -1) handleMazeMove('left');
+      else if (dy === 1) handleMazeMove('down');
+      else if (dy === -1) handleMazeMove('up');
+    }
+  };
+
+  const handleResetMazePath = () => {
+    setAvatarPos({ col: 0, row: 0 });
+    setAvatarPath([{ col: 0, row: 0 }]);
+    setMazeFeedback(null);
+  };
+
+  // Keyboard navigation for Maze Glide mode
+  useEffect(() => {
+    if (puzzleType !== 'maze' || mazeControlMode !== 'glide') return;
+
+    const handleMazeKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') {
+        handleMazeMove('up');
+        e.preventDefault();
+      } else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') {
+        handleMazeMove('down');
+        e.preventDefault();
+      } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+        handleMazeMove('left');
+        e.preventDefault();
+      } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+        handleMazeMove('right');
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener('keydown', handleMazeKeyDown);
+    return () => window.removeEventListener('keydown', handleMazeKeyDown);
+  }, [puzzleType, mazeControlMode, avatarPos, avatarPath, mazeGrid, mazeCols, mazeRows, isSolved]);
+
+  // Touch & Swipe handlers on the maze canvas for mobile fingers
+  const handleStagePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (puzzleType !== 'maze' || mazeControlMode !== 'glide' || isSolved) return;
+    touchStartRef.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleStagePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (puzzleType !== 'maze' || mazeControlMode !== 'glide' || isSolved || !touchStartRef.current) return;
+    const dx = e.clientX - touchStartRef.current.x;
+    const dy = e.clientY - touchStartRef.current.y;
+    touchStartRef.current = null;
+    const minDist = 18; // Swipe threshold
+    if (Math.abs(dx) > minDist || Math.abs(dy) > minDist) {
+      if (Math.abs(dx) > Math.abs(dy)) {
+        handleMazeMove(dx > 0 ? 'right' : 'left');
+      } else {
+        handleMazeMove(dy > 0 ? 'down' : 'up');
+      }
+      return;
+    }
+
+    // Direct tap on maze canvas cell
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const cell = mapCanvasPointToMazeCell(point, rect.width, rect.height, mazeCols, mazeRows);
+    if (!cell.insideMaze) return;
+
+    const dCol = cell.col - avatarPos.col;
+    const dRow = cell.row - avatarPos.row;
+    if (Math.abs(dCol) > Math.abs(dRow)) {
+      handleMazeMove(dCol > 0 ? 'right' : 'left');
+    } else if (Math.abs(dRow) > 0) {
+      handleMazeMove(dRow > 0 ? 'down' : 'up');
+    }
+  };
+
   // Read word, definition, and example sentence aloud for early readers
   const speakWord = (def: WordDefinition) => {
     try {
@@ -611,65 +831,102 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
           </div>
         ) : null}
 
-        {/* Crayon Tools (Colors & Width) - Shown when not in Sudoku interactive mode */}
-        {(puzzleType !== 'sudoku' || sudokuMode === 'crayon') && (
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Colors */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold text-slate-500 uppercase mr-1">Crayon:</span>
-              {BRUSH_COLORS.map((c) => (
-                <button
-                  key={c.hex}
-                  type="button"
-                  onClick={() => setActiveColor(c.hex)}
-                  className={`w-6 h-6 rounded-full transition-all cursor-pointer ${
-                    activeColor === c.hex
-                      ? 'ring-2 ring-offset-2 ring-slate-800 scale-110 shadow-xs'
-                      : 'hover:scale-105 opacity-85 hover:opacity-100'
-                  }`}
-                  style={{ backgroundColor: c.hex }}
-                  title={c.name}
-                />
-              ))}
-            </div>
-
-            {/* Trail Thickness */}
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setLineWidth(4)}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
-                  lineWidth === 4 ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'
-                }`}
-              >
-                Thin
-              </button>
-              <button
-                type="button"
-                onClick={() => setLineWidth(7)}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
-                  lineWidth === 7 ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'
-                }`}
-              >
-                Medium
-              </button>
-              <button
-                type="button"
-                onClick={() => setLineWidth(11)}
-                className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
-                  lineWidth === 11 ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'
-                }`}
-              >
-                Thick
-              </button>
-            </div>
+        {/* Maze Mode Switcher (Finger Glide & D-Pad vs Crayon Doodle) */}
+        {puzzleType === 'maze' ? (
+          <div className="flex items-center gap-1 bg-slate-200/80 p-0.5 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setMazeControlMode('glide')}
+              className={`px-3 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                mazeControlMode === 'glide'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-300" />
+              <span>Tap &amp; Glide 🚀</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMazeControlMode('crayon')}
+              className={`px-3 py-1 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                mazeControlMode === 'crayon'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+              }`}
+            >
+              <PenTool className="w-3.5 h-3.5" />
+              <span>Crayon ✏️</span>
+            </button>
           </div>
-        )}
+        ) : null}
+
+        {/* Crayon Tools (Colors & Width) - Shown when in crayon mode */}
+        {(puzzleType !== 'sudoku' || sudokuMode === 'crayon') &&
+          (puzzleType !== 'maze' || mazeControlMode === 'crayon') && (
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Colors */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-bold text-slate-500 uppercase mr-1">Crayon:</span>
+                {BRUSH_COLORS.map((c) => (
+                  <button
+                    key={c.hex}
+                    type="button"
+                    onClick={() => setActiveColor(c.hex)}
+                    className={`w-6 h-6 rounded-full transition-all cursor-pointer ${
+                      activeColor === c.hex
+                        ? 'ring-2 ring-offset-2 ring-slate-800 scale-110 shadow-xs'
+                        : 'hover:scale-105 opacity-85 hover:opacity-100'
+                    }`}
+                    style={{ backgroundColor: c.hex }}
+                    title={c.name}
+                  />
+                ))}
+              </div>
+
+              {/* Trail Thickness */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setLineWidth(4)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    lineWidth === 4 ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  Thin
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLineWidth(7)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    lineWidth === 7 ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  Medium
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLineWidth(11)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    lineWidth === 11 ? 'bg-slate-800 text-white' : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  Thick
+                </button>
+              </div>
+            </div>
+          )}
 
         {/* Interactive Mode Helper Indicator */}
         {puzzleType === 'sudoku' && sudokuMode === 'interactive' && (
           <div className="hidden sm:flex items-center gap-1 text-[11px] font-bold text-slate-500">
             <span>✨ Mathematical Auto-Validation Active</span>
+          </div>
+        )}
+
+        {puzzleType === 'maze' && mazeControlMode === 'glide' && (
+          <div className="hidden sm:flex items-center gap-1 text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-lg border border-indigo-200">
+            <span>🚀 Road-Trip Finger Accommodator Active (D-Pad &amp; Glide)</span>
           </div>
         )}
 
@@ -789,7 +1046,9 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
       {/* Main Interactive Stage */}
       <div
         ref={containerRef}
-        className="relative w-full aspect-[500/520] max-h-[460px] bg-white border-2 border-slate-200 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden touch-none select-none"
+        onPointerDown={handleStagePointerDown}
+        onPointerUp={handleStagePointerUp}
+        className="relative w-full aspect-[500/520] max-h-[460px] bg-white border-2 border-slate-200 rounded-2xl shadow-inner flex items-center justify-center overflow-hidden touch-none select-none cursor-pointer"
       >
         {/* Pause Screen Overlay */}
         {isTimerPaused && !isSolved && (
@@ -935,6 +1194,91 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
               }}
             />
 
+            {/* Smart Maze Glide SVG Overlay for Accommodating Fingers */}
+            {puzzleType === 'maze' && mazeControlMode === 'glide' && (
+              <svg
+                viewBox="0 0 500 500"
+                className="absolute inset-0 w-full h-full pointer-events-none z-10"
+              >
+                {/* Glowing Trail Polyline */}
+                {avatarPath.length > 1 && (
+                  <polyline
+                    points={avatarPath
+                      .map((p) => {
+                        const cx = mazeCellMetrics.offsetX + (p.col + 0.5) * mazeCellMetrics.cellSize;
+                        const cy = mazeCellMetrics.offsetY + (p.row + 0.5) * mazeCellMetrics.cellSize;
+                        return `${cx},${cy}`;
+                      })
+                      .join(' ')}
+                    fill="none"
+                    stroke="#f59e0b"
+                    strokeWidth={Math.max(6, mazeCellMetrics.cellSize * 0.45)}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="opacity-90 drop-shadow-md"
+                  />
+                )}
+
+                {/* Visited Cells Dots */}
+                {avatarPath.map((p, idx) => {
+                  const cx = mazeCellMetrics.offsetX + (p.col + 0.5) * mazeCellMetrics.cellSize;
+                  const cy = mazeCellMetrics.offsetY + (p.row + 0.5) * mazeCellMetrics.cellSize;
+                  return (
+                    <circle
+                      key={`${p.col}-${p.row}-${idx}`}
+                      cx={cx}
+                      cy={cy}
+                      r={Math.max(2.5, mazeCellMetrics.cellSize * 0.16)}
+                      fill="#fbbf24"
+                    />
+                  );
+                })}
+
+                {/* Goal Finish Marker */}
+                <g
+                  transform={`translate(${
+                    mazeCellMetrics.offsetX + (mazeCols - 0.5) * mazeCellMetrics.cellSize
+                  }, ${mazeCellMetrics.offsetY + (mazeRows - 0.5) * mazeCellMetrics.cellSize})`}
+                >
+                  <circle
+                    r={Math.max(8, mazeCellMetrics.cellSize * 0.45)}
+                    fill="#10b981"
+                    opacity="0.3"
+                    className="animate-ping"
+                  />
+                  <text
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={Math.max(14, mazeCellMetrics.cellSize * 0.85)}
+                  >
+                    {goalIcon}
+                  </text>
+                </g>
+
+                {/* Animated Player Avatar at avatarPos */}
+                <g
+                  transform={`translate(${
+                    mazeCellMetrics.offsetX + (avatarPos.col + 0.5) * mazeCellMetrics.cellSize
+                  }, ${mazeCellMetrics.offsetY + (avatarPos.row + 0.5) * mazeCellMetrics.cellSize})`}
+                >
+                  <circle
+                    r={Math.max(10, mazeCellMetrics.cellSize * 0.5)}
+                    fill="#3b82f6"
+                    opacity="0.35"
+                    className="animate-pulse"
+                  />
+                  <text
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fontSize={Math.max(14, mazeCellMetrics.cellSize * 0.9)}
+                    className="filter drop-shadow-md select-none"
+                  >
+                    {playerAvatar}
+                  </text>
+                </g>
+              </svg>
+            )}
+
             {/* Interactive Mouse & Touch Drawing Canvas Layer */}
             <canvas
               ref={canvasRef}
@@ -942,14 +1286,23 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
-              className="absolute inset-0 w-full h-full cursor-crosshair z-10 touch-none"
+              className={`absolute inset-0 w-full h-full cursor-crosshair z-10 touch-none ${
+                puzzleType === 'maze' && mazeControlMode === 'glide' ? 'pointer-events-none opacity-0' : ''
+              }`}
               style={{ touchAction: 'none' }}
             />
 
-            {/* Helper Tip when no line has been drawn yet */}
-            {!hasDrawn && !isSolved && (
+            {/* Helper Tip when in Crayon mode and no line has been drawn yet */}
+            {!hasDrawn && !isSolved && (puzzleType !== 'maze' || mazeControlMode === 'crayon') && (
               <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none z-20 bg-black/70 text-white text-[11px] font-bold px-3 py-1 rounded-full shadow-lg backdrop-blur-xs flex items-center gap-1.5 animate-pulse">
                 <span>✏️ Click &amp; drag with your mouse or touch to draw your path!</span>
+              </div>
+            )}
+
+            {/* Helper Tip when in Maze Glide mode */}
+            {!isSolved && puzzleType === 'maze' && mazeControlMode === 'glide' && avatarPath.length <= 1 && (
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none z-20 bg-indigo-950/80 text-white text-[11px] font-bold px-3.5 py-1 rounded-full shadow-lg backdrop-blur-xs flex items-center gap-1.5 animate-pulse border border-indigo-400/30">
+                <span>🎮 Tap D-Pad arrows below or swipe on maze to guide {playerAvatar}!</span>
               </div>
             )}
           </>
@@ -963,6 +1316,95 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
           </div>
         )}
       </div>
+
+      {/* Interactive Maze D-Pad Keypad & Touch Controls for Road Trip */}
+      {puzzleType === 'maze' && mazeControlMode === 'glide' && (
+        <div className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-3 text-center space-y-2.5 mt-2 shadow-xs">
+          <div className="flex items-center justify-between text-xs font-bold text-slate-600 px-1">
+            <span className="flex items-center gap-1 text-slate-700">
+              <span>🎮 Road-Trip D-Pad: Tap Arrows or Swipe Maze to Glide</span>
+            </span>
+            <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
+              (or use keyboard Arrow Keys / WASD)
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-4">
+            {/* 4-Way Thumb Pad */}
+            <div className="inline-grid grid-cols-3 gap-1.5 p-1.5 bg-slate-200/90 rounded-2xl shadow-inner">
+              <div />
+              <button
+                type="button"
+                onClick={() => handleMazeMove('up')}
+                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Up (Arrow Up)"
+              >
+                ⬆️
+              </button>
+              <div />
+
+              <button
+                type="button"
+                onClick={() => handleMazeMove('left')}
+                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Left (Arrow Left)"
+              >
+                ⬅️
+              </button>
+              <button
+                type="button"
+                onClick={handleMazeHint}
+                className="w-12 h-12 rounded-xl bg-amber-100 hover:bg-amber-200 active:bg-amber-300 text-amber-800 font-black text-lg shadow-xs border-2 border-amber-300 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Smart Hint: Step towards the exit"
+              >
+                💡
+              </button>
+              <button
+                type="button"
+                onClick={() => handleMazeMove('right')}
+                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Right (Arrow Right)"
+              >
+                ➡️
+              </button>
+
+              <div />
+              <button
+                type="button"
+                onClick={() => handleMazeMove('down')}
+                className="w-12 h-12 rounded-xl bg-white hover:bg-blue-50 active:bg-blue-100 text-blue-600 font-black text-xl shadow-xs border-2 border-slate-300 hover:border-blue-400 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+                title="Glide Down (Arrow Down)"
+              >
+                ⬇️
+              </button>
+              <div />
+            </div>
+
+            {/* Quick Helper Buttons */}
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleMazeHint}
+                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-xs"
+                title="Step along the solution path"
+              >
+                <Lightbulb className="w-4 h-4 text-amber-200" />
+                <span>Next Hint</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetMazePath}
+                className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 shadow-2xs"
+                title="Restart from entrance"
+              >
+                <RotateCcw className="w-4 h-4 text-slate-500" />
+                <span>Reset Path</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Interactive Sudoku Number Keypad & Controls */}
       {puzzleType === 'sudoku' && sudokuMode === 'interactive' && sudokuSpecs && (
@@ -1133,7 +1575,10 @@ export const InteractivePuzzleCanvas: React.FC<InteractivePuzzleCanvasProps> = (
                 sudokuSpecs.boxHeight
               ).isCorrect
             : false;
-        const isMazeFullySolved = puzzleType === 'maze' && Boolean(mazeFeedback?.includes('BRILLIANT'));
+        const isMazeFullySolved =
+          puzzleType === 'maze' &&
+          (Boolean(mazeFeedback?.includes('BRILLIANT')) ||
+            (avatarPos.col === mazeCols - 1 && avatarPos.row === mazeRows - 1 && avatarPath.length > 1));
 
         const handleClaimStampClick = () => {
           if (isSolved) {
